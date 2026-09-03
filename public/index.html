@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fonepay QR – Instant Payment</title>
+  <style>
+    /* ---- Reset & base ---- */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(145deg, #f6f9fc 0%, #e9f1f7 100%);
+      padding: 20px;
+      margin: 0;
+    }
+
+    /* ---- Card container (glass) ---- */
+    .card {
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-radius: 32px;
+      padding: 40px 32px;
+      max-width: 440px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0, 20, 30, 0.12), 0 8px 24px rgba(0, 0, 0, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      transition: transform 0.25s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+    }
+
+    /* ---- Header ---- */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+
+    .brand-icon {
+      width: 48px;
+      height: 48px;
+      background: #0a7d3e;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 22px;
+      box-shadow: 0 6px 14px rgba(10, 125, 62, 0.25);
+    }
+
+    .brand h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #0b1e2a;
+    }
+
+    .brand span {
+      color: #0a7d3e;
+    }
+
+    .subtitle {
+      color: #5b6f7e;
+      font-size: 0.95rem;
+      margin-bottom: 28px;
+      line-height: 1.4;
+    }
+
+    /* ---- Form ---- */
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #1e2c38;
+      margin-bottom: 4px;
+      letter-spacing: 0.01em;
+    }
+
+    input {
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid #e2eaf0;
+      border-radius: 16px;
+      font-size: 1rem;
+      background: white;
+      transition: border 0.2s, box-shadow 0.2s;
+      margin-bottom: 18px;
+      outline: none;
+    }
+
+    input:focus {
+      border-color: #0a7d3e;
+      box-shadow: 0 0 0 4px rgba(10, 125, 62, 0.12);
+    }
+
+    input::placeholder {
+      color: #aab9c7;
+    }
+
+    /* ---- Button ---- */
+    button {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 16px;
+      background: #0a7d3e;
+      color: white;
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
+      box-shadow: 0 8px 20px rgba(10, 125, 62, 0.25);
+    }
+
+    button:hover:not(:disabled) {
+      background: #086b34;
+      transform: scale(0.98);
+    }
+
+    button:disabled {
+      background: #8bb7a0;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    /* ---- QR area ---- */
+    #qrArea {
+      margin-top: 24px;
+      display: none;
+      text-align: center;
+      animation: fadeIn 0.5s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.94); }
+      to { opacity: 1; transform: scale(1); }
+    }
+
+    #qrImage {
+      width: 200px;
+      height: 200px;
+      border-radius: 20px;
+      background: white;
+      padding: 8px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.06);
+      border: 2px solid #f0f4f8;
+    }
+
+    #invoiceNo {
+      display: block;
+      margin: 12px 0 8px;
+      font-size: 0.9rem;
+      color: #2d4050;
+      font-weight: 500;
+      background: #f0f6fa;
+      padding: 6px 16px;
+      border-radius: 40px;
+      display: inline-block;
+    }
+
+    #status {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 8px 24px;
+      border-radius: 40px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      background: #fff7e6;
+      color: #b7791f;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    .status-scanned {
+      background: #e6f3ff;
+      color: #1a6fc4;
+    }
+    .status-paid {
+      background: #e6f8ee;
+      color: #0a7d3e;
+    }
+    .status-failed,
+    .status-timeout {
+      background: #fdecea;
+      color: #c0392b;
+    }
+
+    /* ---- Error ---- */
+    #errorMsg {
+      color: #c0392b;
+      font-size: 0.9rem;
+      margin-top: 12px;
+      display: none;
+      padding: 8px 14px;
+      background: #fdecea;
+      border-radius: 12px;
+    }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 480px) {
+      .card { padding: 28px 20px; }
+      #qrImage { width: 160px; height: 160px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <!-- Brand -->
+    <div class="brand">
+      <div class="brand-icon">₹</div>
+      <h1>Pay<span>QR</span></h1>
+    </div>
+    <p class="subtitle">Scan with any Fonepay‑supported app &mdash; instant confirmation.</p>
+
+    <!-- Form -->
+    <form id="checkoutForm">
+      <label for="amount">Amount (NPR)</label>
+      <input type="number" id="amount" min="1" step="0.01" placeholder="e.g. 150" required autofocus />
+
+      <label for="remarks1">Reference (letters, numbers, dots)</label>
+      <input type="text" id="remarks1" placeholder="Name" />
+
+      <button type="submit" id="generateBtn">Generate QR</button>
+    </form>
+
+    <div id="errorMsg"></div>
+
+    <!-- QR & status -->
+    <div id="qrArea">
+      <img id="qrImage" alt="Fonepay QR code" />
+      <div id="invoiceNo"></div>
+      <div><span id="status">Waiting for scan…</span></div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      // ---- DOM refs ----
+      const form = document.getElementById('checkoutForm');
+      const generateBtn = document.getElementById('generateBtn');
+      const qrArea = document.getElementById('qrArea');
+      const qrImage = document.getElementById('qrImage');
+      const invoiceNoEl = document.getElementById('invoiceNo');
+      const statusEl = document.getElementById('status');
+      const errorEl = document.getElementById('errorMsg');
+      const remarksInput = document.getElementById('remarks1');
+
+      let socket = null;
+
+      // ---- Strict sanitisation: only letters, digits, dot ----
+      function sanitizeRemarks1() {
+        remarksInput.value = remarksInput.value.replace(/[^a-zA-Z0-9.]/g, '');
+      }
+      remarksInput.addEventListener('input', sanitizeRemarks1);
+
+      // ---- UI helpers ----
+      function setStatus(text, cssClass) {
+        statusEl.textContent = text;
+        statusEl.className = cssClass || '';
+      }
+
+      function showError(message) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+      }
+
+      function hideError() {
+        errorEl.style.display = 'none';
+      }
+
+      // ---- Timestamp for remarks1 ----
+      function formatDateTimeStamp(date = new Date()) {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        let h = date.getHours();
+        const min = String(date.getMinutes()).padStart(2, '0');
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12;
+        if (h === 0) h = 12;
+        return `${y}.${m}.${d}.${h}.${min}.${ampm}`;
+      }
+
+      function buildRemarks1(rawInput) {
+        return `${rawInput}.${formatDateTimeStamp()}`;
+      }
+
+      // ---- QR generation ----
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        hideError();
+        generateBtn.disabled = true;
+        generateBtn.textContent = 'Generating…';
+
+        const amount = document.getElementById('amount').value;
+        const rawRemarks1 = remarksInput.value.replace(/[^a-zA-Z0-9.]/g, '');
+        const remarks1 = buildRemarks1(rawRemarks1);
+
+        try {
+          const res = await fetch('/api/qr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ amount, remarks1 }),
+          });
+          const data = await res.json();
+
+          if (!res.ok) throw new Error(data.error || 'Failed to generate QR');
+
+          invoiceNoEl.textContent = `${remarks1},${data.invoiceNo}`;
+          qrImage.src = data.qrImageDataUrl;
+          qrArea.style.display = 'block';
+          setStatus('Waiting for scan…', 'status-pending');
+
+          connectToOrderSocket(data.prn, data.orderToken);
+        } catch (err) {
+          showError(err.message);
+        } finally {
+          generateBtn.disabled = false;
+          generateBtn.textContent = 'Generate QR';
+        }
+      });
+
+      // ---- WebSocket connection ----
+      function connectToOrderSocket(prn, orderToken) {
+        if (socket) socket.close();
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(
+          `${protocol}//${location.host}/ws?prn=${encodeURIComponent(prn)}&token=${encodeURIComponent(orderToken)}`
+        );
+
+        socket.onmessage = (event) => {
+          const msg = JSON.parse(event.data);
+          switch (msg.type) {
+            case 'qr_scanned':
+              setStatus('QR scanned — confirming payment…', 'status-scanned');
+              break;
+            case 'paid':
+              setStatus('Payment successful ✓', 'status-paid');
+              socket.close();
+              break;
+            case 'failed':
+              setStatus('Payment failed', 'status-failed');
+              socket.close();
+              break;
+            case 'timeout':
+              setStatus('QR expired — please try again', 'status-timeout');
+              socket.close();
+              break;
+            case 'error':
+              showError(msg.message);
+              break;
+            default:
+              break;
+          }
+        };
+
+        socket.onerror = () => showError('Lost connection to server');
+      }
+    })();
+  </script>
+
+</body>
+</html>
