@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Fonepay QR – Instant Payment</title>
   <style>
-    /* ---- Reset & base ---- */
     * {
       margin: 0;
       padding: 0;
@@ -21,9 +20,10 @@
       background: linear-gradient(145deg, #f6f9fc 0%, #e9f1f7 100%);
       padding: 20px;
       margin: 0;
+      pointer-events: none;
+      user-select: none;
     }
 
-    /* ---- Card container (glass) ---- */
     .card {
       background: rgba(255, 255, 255, 0.85);
       backdrop-filter: blur(12px);
@@ -34,14 +34,8 @@
       width: 100%;
       box-shadow: 0 20px 60px rgba(0, 20, 30, 0.12), 0 8px 24px rgba(0, 0, 0, 0.04);
       border: 1px solid rgba(255, 255, 255, 0.5);
-      transition: transform 0.25s ease;
     }
 
-    .card:hover {
-      transform: translateY(-4px);
-    }
-
-    /* ---- Header ---- */
     .brand {
       display: flex;
       align-items: center;
@@ -81,7 +75,6 @@
       line-height: 1.4;
     }
 
-    /* ---- Form ---- */
     label {
       display: block;
       font-size: 0.85rem;
@@ -101,6 +94,8 @@
       transition: border 0.2s, box-shadow 0.2s;
       margin-bottom: 18px;
       outline: none;
+      pointer-events: auto;
+      user-select: text;
     }
 
     input:focus {
@@ -112,8 +107,7 @@
       color: #aab9c7;
     }
 
-    /* ---- Button ---- */
-    button {
+    button, a.bill-link {
       width: 100%;
       padding: 16px;
       border: none;
@@ -125,9 +119,15 @@
       cursor: pointer;
       transition: background 0.2s, transform 0.1s, box-shadow 0.2s;
       box-shadow: 0 8px 20px rgba(10, 125, 62, 0.25);
+      pointer-events: auto;
+      user-select: none;
+      display: block;
+      text-align: center;
+      text-decoration: none;
+      box-sizing: border-box;
     }
 
-    button:hover:not(:disabled) {
+    button:hover:not(:disabled), a.bill-link:hover {
       background: #086b34;
       transform: scale(0.98);
     }
@@ -138,7 +138,6 @@
       box-shadow: none;
     }
 
-    /* ---- QR area ---- */
     #qrArea {
       margin-top: 24px;
       display: none;
@@ -152,6 +151,8 @@
     }
 
     #qrImage {
+      display: block;
+      margin: 0 auto 12px auto;
       width: 200px;
       height: 200px;
       border-radius: 20px;
@@ -161,16 +162,34 @@
       border: 2px solid #f0f4f8;
     }
 
-    #invoiceNo {
-      display: block;
-      margin: 12px 0 8px;
+    #invoiceDetails {
+      margin: 12px auto 12px;
+      background: #f0f6fa;
+      border-radius: 20px;
+      padding: 14px 18px;
+      text-align: left;
       font-size: 0.9rem;
       color: #2d4050;
-      font-weight: 500;
-      background: #f0f6fa;
-      padding: 6px 16px;
-      border-radius: 40px;
+      line-height: 1.6;
       display: inline-block;
+      min-width: 220px;
+    }
+
+    #invoiceDetails div {
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+      margin-bottom: 4px;
+    }
+
+    #invoiceDetails div:last-child {
+      margin-bottom: 0;
+    }
+
+    #invoiceDetails strong {
+      flex: 0 0 90px;
+      font-weight: 600;
+      color: #1e2c38;
     }
 
     #status {
@@ -199,7 +218,11 @@
       color: #c0392b;
     }
 
-    /* ---- Error ---- */
+    #billArea {
+      margin-top: 14px;
+      display: none;
+    }
+
     #errorMsg {
       color: #c0392b;
       font-size: 0.9rem;
@@ -210,65 +233,73 @@
       border-radius: 12px;
     }
 
-    /* ---- Responsive ---- */
     @media (max-width: 480px) {
       .card { padding: 28px 20px; }
       #qrImage { width: 160px; height: 160px; }
+      #invoiceDetails { min-width: 180px; }
+      #invoiceDetails strong { flex: 0 0 75px; }
     }
   </style>
 </head>
 <body>
 
   <div class="card">
-    <!-- Brand -->
     <div class="brand">
       <div class="brand-icon">रु</div>
       <h1>Pay<span>QR</span></h1>
     </div>
     <p class="subtitle">Scan with any Fonepay‑supported app &mdash; instant confirmation.</p>
 
-    <!-- Form -->
-    <form id="checkoutForm">
+    <form id="checkoutForm" autocomplete="off">
       <label for="amount">Amount (NPR)</label>
       <input type="number" id="amount" min="1" step="0.01" placeholder="e.g. 150" required autofocus />
 
-      <label for="remarks1">Reference (letters, numbers, dots)</label>
-      <input type="text" id="remarks1" placeholder="Name" />
+      <label for="remarks1">Remarks</label>
+      <input type="text" id="remarks1" placeholder="enter remark" maxlength="12" />
 
       <button type="submit" id="generateBtn">Generate QR</button>
     </form>
 
     <div id="errorMsg"></div>
 
-    <!-- QR & status -->
     <div id="qrArea">
       <img id="qrImage" alt="Fonepay QR code" />
-      <div id="invoiceNo"></div>
+
+      <div id="invoiceDetails">
+        <div><strong>Invoice No:</strong> <span id="invoiceNo"></span></div>
+        <div><strong>Amount:</strong>रु<span id="invoiceAmount"></span></div>
+        <div><strong>Remarks:</strong> <span id="invoiceRemarks"></span></div>
+      </div>
+
       <div><span id="status">Waiting for scan…</span></div>
+
+      <div id="billArea">
+        <a id="billLink" class="bill-link" href="#" target="_blank" rel="noopener">View &amp; Download Bill</a>
+      </div>
     </div>
   </div>
 
   <script>
     (function() {
-      // ---- DOM refs ----
       const form = document.getElementById('checkoutForm');
       const generateBtn = document.getElementById('generateBtn');
       const qrArea = document.getElementById('qrArea');
       const qrImage = document.getElementById('qrImage');
       const invoiceNoEl = document.getElementById('invoiceNo');
+      const invoiceAmountEl = document.getElementById('invoiceAmount');
+      const invoiceRemarksEl = document.getElementById('invoiceRemarks');
       const statusEl = document.getElementById('status');
       const errorEl = document.getElementById('errorMsg');
-      const remarksInput = document.getElementById('remarks1');
+      const remarks1Input = document.getElementById('remarks1');
+      const billArea = document.getElementById('billArea');
+      const billLink = document.getElementById('billLink');
 
       let socket = null;
 
-      // ---- Strict sanitisation: only letters, digits, dot ----
-      function sanitizeRemarks1() {
-        remarksInput.value = remarksInput.value.replace(/[^a-zA-Z0-9.]/g, '');
-      }
-      remarksInput.addEventListener('input', sanitizeRemarks1);
+      remarks1Input.addEventListener('input', () => {
+        remarks1Input.value = remarks1Input.value.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 12);
+      });
 
-      // ---- UI helpers ----
       function setStatus(text, cssClass) {
         statusEl.textContent = text;
         statusEl.className = cssClass || '';
@@ -283,33 +314,15 @@
         errorEl.style.display = 'none';
       }
 
-      // ---- Timestamp for remarks1 ----
-      function formatDateTimeStamp(date = new Date()) {
-        const y = date.getFullYear();
-        const m = String(date.getMonth() + 1).padStart(2, '0');
-        const d = String(date.getDate()).padStart(2, '0');
-        let h = date.getHours();
-        const min = String(date.getMinutes()).padStart(2, '0');
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        h = h % 12;
-        if (h === 0) h = 12;
-        return `${y}.${m}.${d}.${h}.${min}.${ampm}`;
-      }
-
-      function buildRemarks1(rawInput) {
-        return `${rawInput}.${formatDateTimeStamp()}`;
-      }
-
-      // ---- QR generation ----
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         hideError();
         generateBtn.disabled = true;
         generateBtn.textContent = 'Generating…';
+        billArea.style.display = 'none';
 
         const amount = document.getElementById('amount').value;
-        const rawRemarks1 = remarksInput.value.replace(/[^a-zA-Z0-9.]/g, '');
-        const remarks1 = buildRemarks1(rawRemarks1);
+        const remarks1 = remarks1Input.value.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 12).trim();
 
         try {
           const res = await fetch('/api/qr', {
@@ -321,8 +334,12 @@
 
           if (!res.ok) throw new Error(data.error || 'Failed to generate QR');
 
-          invoiceNoEl.textContent = `${remarks1},${data.invoiceNo}`;
+          invoiceNoEl.textContent = data.invoiceNo;
+          invoiceAmountEl.textContent = amount;
+          invoiceRemarksEl.textContent = remarks1 || '—';
+
           qrImage.src = data.qrImageDataUrl;
+          qrImage.style.display = 'block';
           qrArea.style.display = 'block';
           setStatus('Waiting for scan…', 'status-pending');
 
@@ -335,7 +352,6 @@
         }
       });
 
-      // ---- WebSocket connection ----
       function connectToOrderSocket(prn, orderToken) {
         if (socket) socket.close();
 
@@ -349,9 +365,14 @@
           switch (msg.type) {
             case 'qr_scanned':
               setStatus('QR scanned — confirming payment…', 'status-scanned');
+              qrImage.style.display = 'none';
               break;
             case 'paid':
               setStatus('Payment successful ✓', 'status-paid');
+              if (msg.billUrl) {
+                billLink.href = msg.billUrl;
+                billArea.style.display = 'block';
+              }
               socket.close();
               break;
             case 'failed':
