@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 
 const MAX_PRN_LENGTH = 25;
-const MAX_REMARKS_LENGTH = 25;
+const MAX_REMARKS_LENGTH = 30;
 
 function sanitizeForFonepay(value, maxLength) {
   return String(value ?? '')
