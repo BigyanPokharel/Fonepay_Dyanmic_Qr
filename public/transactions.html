@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transaction History</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #f0f4f8;
+      padding: 30px 20px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 24px;
+      padding: 30px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.06);
+    }
+    h1 { font-size:1.8rem; margin-bottom:10px; display:flex; align-items:center; gap:12px; }
+    .back-link { display:inline-block; margin-bottom:20px; color:#0a7d3e; text-decoration:none; font-weight:500; }
+    .back-link:hover { text-decoration:underline; }
+    .admin-bar { display:flex; align-items:center; gap:10px; margin-bottom:16px; font-size:0.85rem; color:#5b6f7e; }
+    .admin-bar button { border:none; background:none; color:#0a7d3e; font-weight:600; cursor:pointer; padding:0; font-size:0.85rem; }
+    .filters { display:flex; gap:16px; flex-wrap:wrap; margin:20px 0; }
+    .filters select, .filters input { padding:8px 14px; border:2px solid #e2eaf0; border-radius:12px; font-size:0.95rem; background:white; }
+    .filters button { padding:8px 20px; border:none; background:#0a7d3e; color:white; border-radius:12px; font-weight:600; cursor:pointer; }
+    .filters button:hover { background:#086b34; }
+    table { width:100%; border-collapse:collapse; margin-top:16px; font-size:0.9rem; table-layout:fixed; }
+    th:nth-child(1), td:nth-child(1) { width:150px; max-width:150px; }
+    th:nth-child(2), td:nth-child(2) { text-align:center; }
+    td:nth-child(1) code { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    th { text-align:left; padding:12px 10px; background:#f8fafc; border-bottom:2px solid #e2eaf0; font-weight:600; color:#1e2c38; }
+    td { padding:12px 10px; border-bottom:1px solid #edf2f6; vertical-align:middle; }
+    .status-badge { padding:4px 12px; border-radius:30px; font-size:0.8rem; font-weight:600; display:inline-block; }
+    .status-pending { background:#fff7e6; color:#b7791f; }
+    .status-qr_scanned { background:#e6f3ff; color:#1a6fc4; }
+    .status-paid { background:#e6f8ee; color:#0a7d3e; }
+    .status-failed { background:#fdecea; color:#c0392b; }
+    .status-timeout { background:#fdecea; color:#c0392b; }
+    .pagination { display:flex; justify-content:center; gap:12px; margin-top:24px; align-items:center; }
+    .pagination button { padding:6px 18px; border:2px solid #e2eaf0; background:white; border-radius:30px; cursor:pointer; font-weight:500; }
+    .pagination button:hover:not(:disabled) { background:#f0f4f8; }
+    .pagination button:disabled { opacity:0.4; cursor:not-allowed; }
+    .pagination span { font-weight:500; color:#2d4050; }
+    .loading { text-align:center; padding:40px; color:#5b6f7e; }
+    .no-transactions { text-align:center; padding:40px; color:#5b6f7e; }
+    .action-btns { display:flex; gap:6px; flex-wrap:wrap; }
+    .verify-btn { padding:4px 12px; border:none; border-radius:30px; background:#1a6fc4; color:white; cursor:pointer; font-size:0.75rem; }
+    .verify-btn:hover { background:#155a9e; }
+    .verify-btn:disabled { opacity:0.5; cursor:not-allowed; }
+    .bill-btn { padding:4px 12px; border-radius:30px; background:#0a7d3e; color:white; cursor:pointer; font-size:0.75rem; text-decoration:none; display:inline-block; }
+    .bill-btn:hover { background:#086b34; }
+    @media (max-width:700px) { table { font-size:0.75rem; } th, td { padding:8px 6px; } .container { padding:16px; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back-link">← Back to QR Generator</a>
+    <h1>📋 Transaction History</h1>
+
+    <div class="admin-bar">
+      <span id="adminKeyStatus">Admin key not set</span>
+      <button id="setAdminKeyBtn">Set admin key</button>
+    </div>
+
+    <div class="filters">
+      <select id="statusFilter">
+        <option value="">All Statuses</option>
+        <option value="pending">Pending</option>
+        <option value="qr_scanned">QR Scanned</option>
+        <option value="paid">Paid</option>
+        <option value="failed">Failed</option>
+        <option value="timeout">Timeout</option>
+      </select>
+      <button id="applyFilters">Apply Filter</button>
+    </div>
+
+    <div id="transactionsContainer">
+      <div class="loading">Loading transactions…</div>
+    </div>
+
+    <div class="pagination" id="pagination">
+      <button id="prevPage" disabled>Previous</button>
+      <span id="pageInfo">Page 1</span>
+      <button id="nextPage">Next</button>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      const container = document.getElementById('transactionsContainer');
+      const prevBtn = document.getElementById('prevPage');
+      const nextBtn = document.getElementById('nextPage');
+      const pageInfo = document.getElementById('pageInfo');
+      const statusFilter = document.getElementById('statusFilter');
+      const applyBtn = document.getElementById('applyFilters');
+      const adminKeyStatus = document.getElementById('adminKeyStatus');
+      const setAdminKeyBtn = document.getElementById('setAdminKeyBtn');
+
+      let currentPage = 1;
+      const limit = 20;
+
+      function getAdminKey() {
+        return sessionStorage.getItem('adminApiKey') || '';
+      }
+
+      function refreshAdminKeyStatus() {
+        adminKeyStatus.textContent = getAdminKey() ? 'Admin key set ✓' : 'Admin key not set';
+      }
+
+      function promptForAdminKey() {
+        const key = prompt('Enter admin API key:');
+        if (key) sessionStorage.setItem('adminApiKey', key.trim());
+        refreshAdminKeyStatus();
+        return getAdminKey();
+      }
+
+      setAdminKeyBtn.addEventListener('click', () => {
+        promptForAdminKey();
+        loadPage(1);
+      });
+
+      function adminHeaders(extra) {
+        return Object.assign({ 'x-api-key': getAdminKey() }, extra || {});
+      }
+
+      async function adminFetch(url, options) {
+        let key = getAdminKey();
+        if (!key) key = promptForAdminKey();
+        const res = await fetch(url, Object.assign({}, options, {
+          headers: adminHeaders(options && options.headers),
+        }));
+        if (res.status === 401) {
+          alert('Admin key rejected. Please re-enter it.');
+          sessionStorage.removeItem('adminApiKey');
+          refreshAdminKeyStatus();
+        }
+        return res;
+      }
+
+      async function fetchTransactions(page = 1, status = '') {
+        container.innerHTML = '<div class="loading">Loading…</div>';
+        const params = new URLSearchParams({ page, limit });
+        if (status) params.append('status', status);
+        const url = `/api/transactions?${params.toString()}`;
+
+        try {
+          const res = await adminFetch(url);
+          if (!res.ok) throw new Error('Failed to fetch');
+          const data = await res.json();
+          renderTransactions(data);
+        } catch (err) {
+          container.innerHTML = `<div class="no-transactions">Error: ${err.message}</div>`;
+        }
+      }
+
+      function renderTransactions(data) {
+        const { transactions, total, page, pages } = data;
+
+        if (!transactions || transactions.length === 0) {
+          container.innerHTML = '<div class="no-transactions">No transactions found.</div>';
+          updatePagination(page, pages);
+          return;
+        }
+
+        let html = `
+          <table>
+            <thead>
+              <tr>
+                <th>PRN</th>
+                <th>Amount</th>
+                <th>Invoice</th>
+                <th>Trace ID</th>
+                <th>Status</th>
+                <th>Nepali Date</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        transactions.forEach(tx => {
+          const statusClass = 'status-' + tx.status;
+          const statusLabel = tx.status.charAt(0).toUpperCase() + tx.status.slice(1);
+          const isFinal = ['paid', 'failed'].includes(tx.status);
+
+          const verifyButton = !isFinal
+            ? `<button class="verify-btn" data-prn="${tx.prn}">Verify</button>`
+            : '';
+
+          const billButton = tx.status === 'paid' && tx.billToken
+            ? `<a class="bill-btn" href="/bill/${tx.billToken}" target="_blank" rel="noopener">Bill</a>`
+            : '';
+
+          html += `
+            <tr data-row-prn="${tx.prn}">
+              <td><code style="font-size:0.8rem;" title="${tx.prn}">${tx.prn}</code></td>
+              <td>रु ${tx.amount}</td>
+              <td>${tx.invoiceNo || '-'}</td>
+              <td>${tx.fonepayTraceId || '-'}</td>
+              <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+              <td>${tx.nepaliDate || '-'}</td>
+              <td><div class="action-btns">${verifyButton}${billButton}</div></td>
+            </tr>
+          `;
+        });
+        html += '</tbody></table>';
+        container.innerHTML = html;
+        updatePagination(page, pages);
+
+        document.querySelectorAll('.verify-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const prn = btn.dataset.prn;
+            btn.disabled = true;
+            btn.textContent = 'Checking…';
+            try {
+              const res = await adminFetch(`/api/transactions/${encodeURIComponent(prn)}/verify`, {
+                method: 'POST',
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error || 'Verify failed');
+              loadPage(currentPage);
+            } catch (err) {
+              alert(`Error: ${err.message}`);
+              btn.disabled = false;
+              btn.textContent = 'Verify';
+            }
+          });
+        });
+
+      }
+
+      function updatePagination(page, pages) {
+        pageInfo.textContent = `Page ${page} of ${pages || 1}`;
+        prevBtn.disabled = page <= 1;
+        nextBtn.disabled = page >= pages;
+        currentPage = page;
+      }
+
+      function loadPage(page) {
+        const status = statusFilter.value;
+        fetchTransactions(page, status);
+      }
+
+      applyBtn.addEventListener('click', () => loadPage(1));
+      prevBtn.addEventListener('click', () => {
+        if (currentPage > 1) loadPage(currentPage - 1);
+      });
+      nextBtn.addEventListener('click', () => {
+        loadPage(currentPage + 1);
+      });
+
+      refreshAdminKeyStatus();
+      loadPage(1);
+    })();
+  </script>
+</body>
+</html>
