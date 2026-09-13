@@ -4,28 +4,27 @@ const http = require('http');
 const crypto = require('crypto');
 const QRCode = require('qrcode');
 const WebSocket = require('ws');
-const mongoose = require('mongoose');
+const { connectDatabase } = require('./connection');
 const FonepayService = require('./fonepayService');
 const Transaction = require('./models/Transaction');
-const { createCanvas, loadImage } = require('canvas');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
+const PDFDocument = require('pdfkit');
 
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
+
+connectDatabase();
+
+app.get('/transactions', (req, res) => {
+  res.sendFile(require('path').join(__dirname, 'public', 'transactions.html'));
+});
 
 const server = http.createServer(app);
 
 const QR_CANVAS_SIZE = 320;
 const LOGO_SIZE = 90;
 const LOGO_PADDING = 4;
-
-const MONGODB_URI_FONEPAY = process.env.MONGODB_URI_FONEPAY || 'mongodb://127.0.0.1:27017/fonepay_qr';
-mongoose
-  .connect(MONGODB_URI_FONEPAY)
-  .then(() => console.log('Connected to MongoDB'))
-  .catch((err) => {
-    console.error('MongoDB connection failed:', err.message);
-  });
 
 const fonepay = new FonepayService({
   merchantCode: process.env.FONEPAY_MERCHANT_CODE,
@@ -64,7 +63,6 @@ function subscribeToFonepay(prn, fonepayWsUrl) {
 
   socket.on('message', async (raw) => {
     const rawText = raw.toString();
-    // console.log(`[fonepay:${prn}] raw ws message:`, rawText);
 
     try {
       const outer = JSON.parse(rawText);
@@ -90,12 +88,19 @@ function subscribeToFonepay(prn, fonepayWsUrl) {
 
         if (confirmed.paymentStatus === 'success') {
           order.status = 'paid';
+          const billToken = generateBillToken();
           broadcast(prn, {
             type: 'paid',
             amount: status.amount,
             traceId: confirmed.fonepayTraceId,
+            billUrl: `/bill/${billToken}`,
           });
-          saveStatus(prn, { status: 'paid', fonepayTraceId: confirmed.fonepayTraceId });
+          saveStatus(prn, {
+            status: 'paid',
+            fonepayTraceId: confirmed.fonepayTraceId,
+            billToken,
+            paidAt: new Date(),
+          });
         } else {
           order.status = 'failed';
           broadcast(prn, { type: 'failed' });
@@ -137,6 +142,10 @@ function generatePrn() {
   return crypto.randomBytes(9).toString('hex');
 }
 
+function generateBillToken() {
+  return crypto.randomBytes(16).toString('base64url');
+}
+
 function generateInvoiceId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let result = '';
@@ -144,6 +153,34 @@ function generateInvoiceId() {
     result += chars.charAt(crypto.randomInt(0, chars.length));
   }
   return result;
+}
+
+const MAX_REMARKS2_LENGTH = 25;
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function generateRemarksTimestamp() {
+  const now = new Date();
+  const yy = pad2(now.getFullYear() % 100);
+  const mm = pad2(now.getMonth() + 1);
+  const dd = pad2(now.getDate());
+  const hh = pad2(now.getHours());
+  const min = pad2(now.getMinutes());
+  return `${yy}${mm}${dd}${hh}${min}`;
+}
+
+function sanitizeRemarks1(value) {
+  return String(value || '')
+    .replace(/[^a-zA-Z0-9 ]/g, '')
+    .trim()
+    .slice(0, 12);
+}
+
+function buildRemarks2({ invoiceNo }) {
+  const timestamp = generateRemarksTimestamp();
+  return `${timestamp}-${invoiceNo}`;
 }
 
 const qrRequestLog = new Map();
@@ -190,9 +227,9 @@ app.post('/api/qr', qrRateLimiter, async (req, res) => {
     }
 
     const prn = generatePrn();
-    const finalRemarks1 = String(remarks1 || 'Order').replace(/,/g, ' ').trim().slice(0, 25);
     const invoiceNo = generateInvoiceId();
-    const finalRemarks2 = `INV-${invoiceNo}`;
+    const finalRemarks1 = sanitizeRemarks1(remarks1) || 'Payment';
+    const finalRemarks2 = buildRemarks2({ invoiceNo });
 
     const fonepayRes = await fonepay.generateQr({
       amount,
@@ -231,7 +268,6 @@ app.post('/api/qr', qrRateLimiter, async (req, res) => {
     const ctx = canvas.getContext('2d');
 
     try {
-      const logoPath = 'images/logo.png';
       const logo = await loadImage(logoPath);
 
       const centerX = QR_CANVAS_SIZE / 2;
@@ -254,13 +290,400 @@ app.post('/api/qr', qrRateLimiter, async (req, res) => {
     res.json({
       prn,
       orderToken,
-      invoiceNo: finalRemarks2,
+      invoiceNo: `INV-${invoiceNo}`,
       qrImageDataUrl,
       expiresInSeconds: PAYMENT_TIMEOUT_MS / 1000,
     });
   } catch (err) {
     console.error('QR generation failed:', err.details || err.message);
     res.status(502).json({ error: 'Could not generate QR', details: err.details });
+  }
+});
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderBillHtml(transaction) {
+  const paidAt = transaction.paidAt || transaction.updatedAt || transaction.createdAt;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Receipt INV-${escapeHtml(transaction.invoiceNo)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+    color: #0f172a;
+  }
+  .receipt {
+    background: #ffffff;
+    border-radius: 24px;
+    padding: 36px 32px;
+    max-width: 440px;
+    width: 100%;
+    box-shadow: 0 20px 40px -15px rgba(15, 23, 42, 0.12);
+    border: 1px solid rgba(226, 232, 240, 0.8);
+  }
+  .header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .success-icon {
+    width: 52px;
+    height: 52px;
+    background: #dcfce7;
+    color: #15803d;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+  }
+  .success-icon svg {
+    width: 28px;
+    height: 28px;
+    stroke-width: 2.5;
+  }
+  h1 {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 6px;
+  }
+  .paid-badge {
+    display: inline-block;
+    background: #dcfce7;
+    color: #15803d;
+    font-weight: 700;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    text-transform: uppercase;
+  }
+  .hero-amount {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .hero-amount .label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+  .hero-amount .val {
+    font-size: 1.85rem;
+    font-weight: 800;
+    color: #0f172a;
+  }
+  .details-list {
+    margin-bottom: 28px;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 0.9rem;
+  }
+  .row:last-of-type {
+    border-bottom: none;
+  }
+  .row .label {
+    color: #64748b;
+    font-weight: 500;
+  }
+  .row .val {
+    color: #0f172a;
+    font-weight: 600;
+    text-align: right;
+    word-break: break-all;
+    margin-left: 16px;
+  }
+  .download {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 14px 20px;
+    background: #0f172a;
+    color: #ffffff;
+    text-decoration: none;
+    border-radius: 14px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+  }
+  .download:hover {
+    background: #1e293b;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.2);
+  }
+  .download svg {
+    width: 18px;
+    height: 18px;
+  }
+  .footer-note {
+    margin-top: 20px;
+    text-align: center;
+    font-size: 0.75rem;
+    color: #94a3b8;
+  }
+</style>
+</head>
+<body>
+  <div class="receipt">
+    <div class="header">
+      <div class="success-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+        </svg>
+      </div>
+      <h1>Payment Receipt</h1>
+      <span class="paid-badge">Paid</span>
+    </div>
+
+    <div class="hero-amount">
+      <div class="label">Amount Paid</div>
+      <div class="val">रु ${escapeHtml(transaction.amount)}</div>
+    </div>
+
+    <div class="details-list">
+      <div class="row"><span class="label">Invoice No</span><span class="val">${escapeHtml(transaction.invoiceNo)}</span></div>
+      <div class="row"><span class="label">Remarks</span><span class="val">${escapeHtml(transaction.remarks1 || '-')}</span></div>
+      <div class="row"><span class="label">Date (BS)</span><span class="val">${escapeHtml(transaction.nepaliDate || '-')}</span></div>
+      <div class="row"><span class="label">Date (AD)</span><span class="val">${escapeHtml(new Date(paidAt).toLocaleString())}</span></div>
+      <div class="row"><span class="label">Reference (PRN)</span><span class="val">${escapeHtml(transaction.prn)}</span></div>
+      ${transaction.fonepayTraceId ? `<div class="row"><span class="label">Fonepay Trace ID</span><span class="val">${escapeHtml(transaction.fonepayTraceId)}</span></div>` : ''}
+    </div>
+
+    <a class="download" href="/bill/${escapeHtml(transaction.billToken)}/pdf">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+      </svg>
+      Download PDF Receipt
+    </a>
+
+    <div class="footer-note">This is a computer-generated digital receipt.</div>
+  </div>
+</body>
+</html>`;
+}
+
+function streamBillPdf(transaction, res) {
+  const paidAt = transaction.paidAt || transaction.updatedAt || transaction.createdAt;
+  const doc = new PDFDocument({
+    size: 'A4',
+    margin: 40,
+    info: {
+      Title: `Invoice INV-${transaction.invoiceNo}`,
+      Author: 'Fonepay QR System',
+      Subject: 'Payment Invoice',
+    },
+  });
+
+  doc.pipe(res);
+
+  const pageWidth = doc.page.width;
+  const contentWidth = pageWidth - doc.page.margins.left - doc.page.margins.right;
+  const logoPath = require('path').join(__dirname, 'images', 'logo.png');
+
+  const C_PRIMARY = '#1e1b4b';
+  const C_BG_LIGHT = '#f8fafc';
+  const C_BORDER = '#e2e8f0';
+  const C_TEXT_MAIN = '#0f172a';
+  const C_TEXT_MUTED = '#64748b';
+
+  doc.roundedRect(40, 40, contentWidth, 85, 12)
+    .fill(C_BG_LIGHT);
+
+  try {
+    doc.image(logoPath, 58, 53, {
+      fit: [60, 60],
+      align: 'center',
+      valign: 'center',
+    });
+  } catch (logoErr) {
+    console.warn('Could not load invoice logo:', logoErr.message);
+  }
+
+  doc.fillColor(C_PRIMARY)
+    .font('Helvetica-Bold')
+    .fontSize(18)
+    .text('TAX INVOICE', 135, 54, { width: 250 });
+
+  doc.fillColor(C_TEXT_MUTED)
+    .font('Helvetica')
+    .fontSize(8.5)
+    .text('Official Fonepay Payment Receipt', 135, 76, { width: 250 });
+
+  doc.fillColor(C_TEXT_MAIN)
+    .font('Helvetica-Bold')
+    .fontSize(9.5)
+    .text(`INV-${transaction.invoiceNo}`, 135, 93, { width: 250 });
+
+  const badgeWidth = 64;
+  const badgeHeight = 22;
+  const badgeX = pageWidth - 40 - badgeWidth - 18;
+  const badgeY = 56;
+
+  doc.roundedRect(badgeX, badgeY, badgeWidth, badgeHeight, badgeHeight / 2)
+    .fill('#dcfce7');
+
+  doc.fillColor('#15803d')
+    .font('Helvetica-Bold')
+    .fontSize(8.5)
+    .text('PAID', badgeX, badgeY + 6, {
+      width: badgeWidth,
+      align: 'center',
+    });
+
+  doc.y = 145;
+
+  const cardWidth = 260;
+  const cardHeight = 68;
+  const cardX = (pageWidth - cardWidth) / 2;
+  const cardY = doc.y;
+
+  doc.roundedRect(cardX, cardY, cardWidth, cardHeight, 10)
+    .fill(C_PRIMARY);
+
+  doc.fillColor('#94a3b8')
+    .font('Helvetica-Bold')
+    .fontSize(7.5)
+    .text('TOTAL AMOUNT PAID', cardX, cardY + 14, { width: cardWidth, align: 'center', tracking: 1 });
+
+doc.registerFont('NepaliFont', require('path').join(__dirname, 'Fonts', 'NotoSansDevanagari-Regular.ttf'));
+
+doc.fillColor('#ffffff')
+  .font('NepaliFont')
+  .fontSize(20)
+  .text(`रु ${Number(transaction.amount).toLocaleString('en-IN')}`, cardX, cardY + 24, { width: cardWidth, align: 'center' });
+
+  doc.y = cardY + cardHeight + 25;
+
+  doc.fillColor(C_PRIMARY)
+    .font('Helvetica-Bold')
+    .fontSize(11)
+    .text('Transaction Breakdown');
+
+  doc.moveDown(0.6);
+
+  const rows = [
+    ['Invoice Reference', `${transaction.invoiceNo}`],
+    ['Customer Remarks', transaction.remarks1 || 'None'],
+    ['Date (BS)', transaction.nepaliDate || '-'],
+    ['Date (AD)', new Date(paidAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })],
+    ['PRN', transaction.prn],
+  ];
+
+  if (transaction.fonepayTraceId) {
+    rows.push(['Fonepay Trace ID', transaction.fonepayTraceId]);
+  }
+
+  const rowHeight = 28;
+  const labelX = 55;
+  const valueX = 220;
+  let rowY = doc.y;
+
+  rows.forEach(([label, value], index) => {
+    if (index % 2 === 0) {
+      doc.roundedRect(40, rowY - 4, contentWidth, rowHeight, 4)
+        .fill(C_BG_LIGHT);
+    }
+
+    doc.fillColor(C_TEXT_MUTED)
+      .font('Helvetica')
+      .fontSize(9)
+      .text(label, labelX, rowY + 5, { width: 150 });
+
+    doc.fillColor(C_TEXT_MAIN)
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .text(String(value), valueX, rowY + 5, {
+        width: contentWidth - 190,
+        align: 'right',
+      });
+
+    rowY += rowHeight;
+  });
+
+  doc.y = rowY + 30;
+
+  doc.moveTo(40, doc.y)
+    .lineTo(pageWidth - 40, doc.y)
+    .lineWidth(0.75)
+    .stroke(C_BORDER);
+
+  doc.moveDown(1.2);
+
+  doc.fillColor(C_TEXT_MAIN)
+    .font('Helvetica-Bold')
+    .fontSize(9.5)
+    .text('Thank you for your Purchase!', { align: 'center' });
+
+  doc.moveDown(0.3);
+
+  doc.fillColor(C_TEXT_MUTED)
+    .font('Helvetica')
+    .fontSize(7.5)
+    .text('This is a computer-generated digital receipt and requires no physical signature.', {
+      align: 'center',
+    });
+
+  doc.end();
+}
+
+app.get('/bill/:token', async (req, res) => {
+  try {
+    const transaction = await Transaction.findOne({
+      billToken: req.params.token,
+      status: 'paid',
+    }).lean();
+    if (!transaction) return res.status(404).send('Bill not found');
+    res.send(renderBillHtml(transaction));
+  } catch (err) {
+    console.error('Failed to render bill:', err.message);
+    res.status(500).send('Could not load bill');
+  }
+});
+
+app.get('/bill/:token/pdf', async (req, res) => {
+  try {
+    const transaction = await Transaction.findOne({
+      billToken: req.params.token,
+      status: 'paid',
+    }).lean();
+    if (!transaction) return res.status(404).json({ error: 'Bill not found' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="invoice-${transaction.invoiceNo}.pdf"`);
+    streamBillPdf(transaction, res);
+  } catch (err) {
+    console.error('Failed to generate bill PDF:', err.message);
+    res.status(500).json({ error: 'Could not generate PDF' });
   }
 });
 
@@ -309,6 +732,38 @@ app.get('/api/transactions/:prn', requireAdminKey, async (req, res) => {
     res.json(transaction);
   } catch (err) {
     res.status(500).json({ error: 'Could not fetch transaction' });
+  }
+});
+
+app.post('/api/transactions/:prn/verify', requireAdminKey, async (req, res) => {
+  try {
+    const transaction = await Transaction.findOne({ prn: req.params.prn });
+    if (!transaction) return res.status(404).json({ error: 'Transaction not found' });
+
+    const result = await fonepay.checkStatus(req.params.prn);
+
+    if (result.fonepayTraceId) transaction.fonepayTraceId = String(result.fonepayTraceId);
+
+    if (result.paymentStatus === 'success') {
+      transaction.status = 'paid';
+      if (!transaction.billToken) {
+        transaction.billToken = generateBillToken();
+        transaction.paidAt = new Date();
+      }
+    } else if (result.paymentStatus === 'failed' || result.paymentStatus === 'cancelled') {
+      transaction.status = 'failed';
+    }
+
+    await transaction.save();
+
+    res.json({
+      transaction: transaction.toObject(),
+      billUrl: transaction.billToken ? `/bill/${transaction.billToken}` : null,
+      fonepayStatus: result.paymentStatus,
+    });
+  } catch (err) {
+    console.error(`Verify failed for ${req.params.prn}:`, err.details || err.message);
+    res.status(502).json({ error: 'Could not verify transaction with Fonepay' });
   }
 });
 
